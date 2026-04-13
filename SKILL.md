@@ -47,6 +47,8 @@ caminho_salvamento: ~/Documents/NFS-e/
 faturamento_anual_acumulado: 0
 cpf_acesso: PREENCHER (CPF do responsavel, formato: 000.000.000-00)
 senha_acesso: PREENCHER (senha do portal nfse.gov.br — NAO e a senha gov.br)
+banco_nome: PREENCHER (ex: Sicoob, Itau, Nubank, Inter, Bradesco)
+banco_url_extrato: PREENCHER (URL da pagina de extrato do internet banking)
 ```
 
 > **Seguranca:** A senha fica armazenada neste arquivo local. Se voce compartilhar o SKILL.md com alguem, remova a senha antes. Para nao armazenar, deixe `senha_acesso: PREENCHER` — a skill pedira a senha a cada uso.
@@ -73,6 +75,8 @@ Ao ser invocado, identifique o modo pelo argumento:
 | `clientes` | Gerenciar Clientes |
 | `batch` | Emissao em Lote |
 | `resumo [MM/YYYY]` | Resumo Mensal |
+| `print [caminho_imagem]` | Emissao por Print de Pagamento |
+| `extrato` | Monitorar Extrato Bancario |
 | `CNPJ/CPF VALOR DATA "DESC"` | Emissao Avulsa |
 | (sem argumento) | Perguntar ao usuario o que deseja |
 
@@ -369,6 +373,97 @@ Faturamento anual acumulado: R$ X / R$ 81.000 (MEI)
 
 ---
 
+## Modo 6: Emissao por Print de Pagamento
+
+**Uso:** `/emitir-nfse print ~/Downloads/comprovante.png`
+
+O usuario recebeu um PIX/TED e quer emitir a nota com base no comprovante. O Claude le a imagem e extrai os dados automaticamente.
+
+### Passo 1 — Ler o Print
+
+1. Ler a imagem usando a ferramenta Read (Claude e multimodal e le imagens)
+   - Se nenhum caminho fornecido: pedir ao usuario que cole ou informe o caminho do arquivo
+2. Extrair da imagem:
+   - **Nome/Razao social** do pagador
+   - **CNPJ ou CPF** do pagador
+   - **Valor** recebido
+   - **Data** do pagamento
+   - **Tipo** de pagamento (PIX, TED, DOC, boleto)
+   - **Banco** de origem (se visivel)
+
+### Passo 2 — Validar e Enriquecer
+
+1. Se extraiu CNPJ: consultar BrasilAPI ou cnpj.biz para confirmar razao_social e municipio
+2. Se extraiu CPF: usar o nome que aparece no print
+3. Verificar se o pagador ja esta na tabela de Clientes
+4. Mostrar resumo ao usuario:
+
+```
+DADOS EXTRAIDOS DO COMPROVANTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Pagador:    [nome/razao_social]
+Documento:  [cnpj/cpf]
+Valor:      R$ [valor]
+Data:       [data]
+Tipo:       [PIX/TED/DOC]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+5. Perguntar: "Emitir nota com estes dados? Descricao: [descricao_padrao] (pode alterar)"
+
+### Passo 3 — Emitir
+
+Seguir o fluxo normal de emissao (Modo 1, Passos 2-7) com os dados extraidos do print.
+
+> **Dica:** Se o print estiver cortado ou com dados ilegíveis, o Claude informara quais campos nao conseguiu ler e pedira ao usuario para complementar.
+
+---
+
+## Modo 7: Monitorar Extrato Bancario
+
+**Uso:** `/emitir-nfse extrato`
+
+Manter uma aba do internet banking aberta no Chrome e monitorar novos creditos para emissao automatica de notas.
+
+### Configuracao do Banco
+
+Campos adicionais na secao Configuracao (preenchidos no setup ou manualmente):
+
+```
+banco_nome: PREENCHER (ex: Sicoob, Itau, Nubank, Inter, Bradesco)
+banco_url_extrato: PREENCHER (URL da pagina de extrato do internet banking)
+```
+
+### Fluxo
+
+1. **Verificar config do banco** — se `banco_nome` ou `banco_url_extrato` = PREENCHER, perguntar ao usuario
+2. **Abrir aba do banco** — navegar para `banco_url_extrato` no Chrome
+3. **Verificar login** — se nao logado no internet banking, informar ao usuario para logar
+4. **Capturar extrato atual** — ler os creditos recentes da pagina (usar `get_page_text` ou `read_page`)
+5. **Identificar novos creditos** — comparar com o log de emissao para encontrar pagamentos ainda sem nota emitida
+6. **Para cada novo credito encontrado:**
+   - Extrair: nome/razao social do pagador, CNPJ/CPF (se visivel), valor, data
+   - Consultar CNPJ via BrasilAPI/cnpj.biz se disponivel
+   - Mostrar ao usuario e perguntar: "Emitir nota para este pagamento?"
+   - Se confirmado: seguir fluxo de emissao (Modo 1, Passos 2-7)
+7. **Resumo ao final:**
+
+```
+MONITORAMENTO DE EXTRATO
+━━━━━━━━━━━━━━━━━━━━━━━━
+Creditos encontrados:  N
+Notas emitidas:        N
+Ja com nota:           N
+Ignorados:             N
+━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+> **Nota:** Cada banco tem uma interface diferente. Na primeira execucao, o Claude inspecionara o DOM do internet banking para encontrar os creditos no extrato. Os selectors podem variar por banco — o Claude se adapta lendo a estrutura da pagina.
+
+> **Seguranca:** O Claude NAO armazena dados bancarios (conta, agencia, saldo). Apenas le os creditos recentes para detectar pagamentos de clientes.
+
+---
+
 ## Output Artifacts
 
 | Quando pedir... | Voce recebe... |
@@ -376,6 +471,8 @@ Faturamento anual acumulado: R$ X / R$ 81.000 (MEI)
 | Emissao de nota | PDF + XML salvos em pasta organizada por mes, log atualizado, confirmacao com chave de acesso |
 | Setup | Configuracao preenchida diretamente no SKILL.md |
 | Batch | Progresso em tempo real + resumo final de notas emitidas/falhas |
+| Print | Dados extraidos do comprovante + emissao automatica |
+| Extrato | Creditos detectados no banco + emissao guiada para cada um |
 | Resumo mensal | Tabela de faturamento por cliente + total + status do limite MEI |
 | Gestao de clientes | Tabela de clientes atualizada no SKILL.md |
 
