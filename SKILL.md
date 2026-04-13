@@ -1,6 +1,6 @@
 ---
 name: emitir-nfse
-description: "Use quando precisar emitir NFS-e (Nota Fiscal de Servico Eletronica) no portal nacional nfse.gov.br, gerenciar clientes, checar limite MEI, ou automatizar faturamento como prestador de servico no Brasil. Triggers: nota fiscal, NFS-e, emitir nota, faturar cliente, nota de servico, DANFSe, portal nacional NFS-e."
+description: "Use quando precisar emitir NFS-e (Nota Fiscal de Servico Eletronica) no portal nacional nfse.gov.br, via API REST com certificado digital, navegador Playwright ou Chrome. Gerenciar clientes, checar limite MEI, monitorar extrato bancario, emitir por comprovante de pagamento. Triggers: nota fiscal, NFS-e, emitir nota, faturar cliente, nota de servico, DANFSe, portal nacional NFS-e, certificado digital."
 license: MIT
 metadata:
   version: 1.0.0
@@ -12,19 +12,24 @@ argument-hint: "[CNPJ/CPF] [VALOR] [DD/MM/YYYY] [\"DESCRICAO\"] | setup | batch 
 
 # Emitir NFS-e — Portal Nacional
 
-Voce e um especialista em emissao de notas fiscais de servico no Brasil. Seu objetivo e automatizar completamente o processo de emissao de NFS-e via portal nfse.gov.br usando o chrome-devtools MCP (Claude in Chrome).
+Voce e um especialista em emissao de notas fiscais de servico no Brasil. Seu objetivo e automatizar completamente o processo de emissao de NFS-e — pela via mais rapida disponivel: API REST com certificado digital, Playwright headless, ou Chrome visivel.
 
 ## Pre-requisitos
 
 Antes de comecar, o usuario deve ter:
 
 - [ ] **Claude Code** instalado
-- [ ] **Chrome** com a extensao **Claude in Chrome** instalada e ativa
-- [ ] Conta **gov.br** com acesso ao portal nfse.gov.br
 - [ ] **CNPJ ativo** com inscricao municipal no municipio de operacao
-- [ ] MCP `claude-in-chrome` configurado no Claude Code (`~/.claude/settings.json`)
+- [ ] Conta **gov.br** com acesso ao portal nfse.gov.br (CPF + senha do portal)
 
-> Se algum item estiver faltando, instruir o usuario antes de prosseguir.
+**Opcional mas recomendado (emissao 10x mais rapida):**
+- [ ] **Certificado digital A1** (.pfx ou .p12) — e-CNPJ ou e-CPF do responsavel
+- [ ] **xmlsec1** instalado (`brew install xmlsec1` no macOS)
+
+**Fallback — se nao tiver certificado:**
+- [ ] **Chrome** com extensao **Claude in Chrome** instalada (`claude-in-chrome` MCP)
+
+> Execute `/emitir-nfse setup` para configurar tudo de forma guiada.
 
 ---
 
@@ -49,9 +54,35 @@ cpf_acesso: PREENCHER (CPF do responsavel, formato: 000.000.000-00)
 senha_acesso: PREENCHER (senha do portal nfse.gov.br — NAO e a senha gov.br)
 banco_nome: PREENCHER (ex: Sicoob, Itau, Nubank, Inter, Bradesco)
 banco_url_extrato: PREENCHER (URL da pagina de extrato do internet banking)
+certificado_pfx: PREENCHER (caminho do certificado digital A1, ex: ~/certificado.pfx)
+certificado_senha: PREENCHER (senha do certificado digital)
+metodo_emissao: auto (auto | api | chrome)
 ```
 
-> **Seguranca:** A senha fica armazenada neste arquivo local. Se voce compartilhar o SKILL.md com alguem, remova a senha antes. Para nao armazenar, deixe `senha_acesso: PREENCHER` — a skill pedira a senha a cada uso.
+> **Seguranca:** Senhas e certificados ficam neste arquivo local. Nao versione este arquivo no git. Nao compartilhe com terceiros. Para nao armazenar senhas, deixe os campos como PREENCHER — a skill pedira a cada uso.
+
+---
+
+## Deteccao de Metodo de Emissao
+
+**A skill detecta automaticamente o metodo mais rapido disponivel:**
+
+```
+Se metodo_emissao = auto (ou omitido):
+  1. Verificar se certificado_pfx existe e senha configurada
+     → SE SIM: usar API REST com certificado digital (~5s por nota)
+  2. Verificar se xmlsec1 esta instalado: `which xmlsec1`
+     → SE FALTA xmlsec1: avisar usuario (brew install xmlsec1) e usar Chrome como fallback
+  3. Fallback sempre disponivel: Chrome via claude-in-chrome (~60s por nota)
+
+Se metodo_emissao = api   → forcar API (erro se certificado nao configurado)
+Se metodo_emissao = chrome → forcar Chrome
+```
+
+| Metodo | Velocidade | Requisito |
+|--------|-----------|-----------|
+| API + certificado | ~5s/nota | Certificado A1 (.pfx) + xmlsec1 |
+| Chrome (atual) | ~60s/nota | Claude in Chrome MCP |
 
 ---
 
@@ -137,6 +168,68 @@ Ver detalhes tecnicos em `references/portal-tecnico.md` → secao "Consulta de C
 ## Modo 1: Emissao Avulsa
 
 **Uso:** `/emitir-nfse 12.345.678/0001-90 3000 25/03/2026 "Assessoria em marketing digital"`
+
+### Passo 0 — Selecionar Metodo de Emissao
+
+Verificar metodo conforme secao "Deteccao de Metodo":
+- **API disponivel** → seguir Modo 1-API (Passos 1-API e 2-API abaixo)
+- **Sem certificado** → seguir Modo 1-Chrome (Passos 1 em diante)
+
+---
+
+#### RAMO API — Emissao via Certificado Digital (~5 segundos)
+
+**Passo 1-API — Validar e buscar parametros municipais**
+
+1. Executar validacoes proativas
+2. Consultar BrasilAPI para o CNPJ do tomador (nome, municipio, situacao)
+3. Confirmar com usuario: "Emitir nota para [razao_social] — R$[valor]? (S/n)"
+4. Buscar parametros do municipio do prestador:
+   ```bash
+   curl -s --cert {certificado_pfx}:{certificado_senha} \
+     "https://sefin.nfse.gov.br/SefinNacional/parametros_municipais/{codigo_municipio_ibge}/convenio"
+   ```
+5. Determinar numero sequencial da proxima DPS (ler ultimo do log ou comecar em 1)
+
+**Passo 2-API — Construir, assinar e enviar DPS**
+
+1. Construir XML da DPS com os dados (ver template em `references/api-nfse.md`)
+2. Extrair chave e certificado do .pfx:
+   ```bash
+   openssl pkcs12 -in {certificado_pfx} -nocerts -nodes -out /tmp/nfse_key.pem -passin pass:{certificado_senha}
+   openssl pkcs12 -in {certificado_pfx} -clcerts -nokeys -out /tmp/nfse_cert.pem -passin pass:{certificado_senha}
+   ```
+3. Assinar XML:
+   ```bash
+   xmlsec1 --sign --privkey-pem /tmp/nfse_key.pem,/tmp/nfse_cert.pem \
+     --output /tmp/dps_signed.xml /tmp/dps.xml
+   ```
+4. Enviar para API:
+   ```bash
+   curl -s --cert {certificado_pfx}:{certificado_senha} \
+     -X POST https://sefin.nfse.gov.br/SefinNacional/nfse \
+     -H "Content-Type: application/xml" \
+     -d @/tmp/dps_signed.xml
+   ```
+5. Processar resposta:
+   - Sucesso: extrair `<chaveAcesso>` e XML da NFS-e
+   - Erro: mostrar `<xMotivo>` ao usuario e cancelar
+
+**Passo 3-API — Pos-emissao**
+
+1. Limpar chaves temporarias: `rm -f /tmp/nfse_key.pem /tmp/nfse_cert.pem /tmp/dps*.xml`
+2. Baixar PDF (DANFSe):
+   ```bash
+   curl -s --cert {certificado_pfx}:{certificado_senha} \
+     "https://sefin.nfse.gov.br/SefinNacional/nfse/{chaveAcesso}" -o nota.xml
+   ```
+3. Salvar XML e PDF em `{caminho_salvamento}/YYYY-MM/`
+4. Atualizar log e `faturamento_anual_acumulado`
+5. Confirmar: "Nota emitida via API! Chave: [chave]. Tempo: ~5s"
+
+---
+
+#### RAMO CHROME — Emissao via Navegador (~60 segundos)
 
 ### Passo 1 — Validar e Consultar CNPJ
 
@@ -318,6 +411,28 @@ Conduzir o usuario por uma entrevista guiada para preencher a Configuracao:
 6. **Descricao padrao:** "Qual sera a descricao padrao das suas notas? (pode personalizar por nota)"
 
 7. **Caminho de salvamento:** "Onde salvar os PDFs? (padrao: ~/Documents/NFS-e/)"
+
+8. **Certificado digital:** "Voce tem certificado digital A1 (.pfx ou .p12)? Ele permite emitir notas 10x mais rapido via API."
+   - Se sim:
+     - Pedir caminho: "Qual o caminho do arquivo? (ex: ~/certificado.pfx)"
+     - Pedir senha: "Qual a senha do certificado?"
+     - Verificar se xmlsec1 esta instalado: `which xmlsec1`
+       - Se nao instalado: "Instale com `brew install xmlsec1` para usar este metodo"
+     - Gravar `certificado_pfx`, `certificado_senha`, `metodo_emissao: auto`
+     - Oferecer configurar `mcp-nfse-nacional` no Claude Code para consulta de notas:
+       ```
+       Adicionar ao ~/.claude/settings.json → mcpServers:
+       "nfse-nacional": {
+         "type": "stdio",
+         "command": "npx",
+         "args": ["-y", "mcp-nfse-nacional"],
+         "env": {
+           "CERT_FILE": "[certificado_pfx]",
+           "CERT_PASSWORD": "[certificado_senha]"
+         }
+       }
+       ```
+   - Se nao: gravar `metodo_emissao: chrome`, informar que usara Chrome
 
 Apos coletar tudo: confirmar com o usuario e escrever os valores na secao Configuracao do SKILL.md.
 
