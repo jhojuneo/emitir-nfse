@@ -1,0 +1,24 @@
+{
+  "name": "emitir-nfse",
+  "version": "1.0.0",
+  "description": "Emissao automatizada de NFS-e (Nota Fiscal de Servico Eletronica) via portal nacional nfse.gov.br. Para prestadores MEI, Simples Nacional e Lucro Presumido.",
+  "author": {
+    "name": "Jhonatan Carvalho",
+    "url": "https://github.com/jhoncarvalho"
+  },
+  "homepage": "https://github.com/jhoncarvalho/emitir-nfse-skill",
+  "repository": "https://github.com/jhoncarvalho/emitir-nfse-skill",
+  "license": "MIT",
+  "keywords": [
+    "nfse",
+    "nota-fiscal",
+    "brasil",
+    "mei",
+    "simples-nacional",
+    "contabilidade",
+    "fiscal",
+    "nfse-gov-br",
+    "automacao"
+  ],
+  "skills": "./"
+}

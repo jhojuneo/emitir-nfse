@@ -1,0 +1,17 @@
+[
+  {
+    "nome": "EMPRESA EXEMPLO LTDA",
+    "doc": "12.345.678/0001-90",
+    "tipo": "CNPJ"
+  },
+  {
+    "nome": "OUTRA EMPRESA S/A",
+    "doc": "98.765.432/0001-10",
+    "tipo": "CNPJ"
+  },
+  {
+    "nome": "JOAO DA SILVA",
+    "doc": "123.456.789-00",
+    "tipo": "CPF"
+  }
+]
