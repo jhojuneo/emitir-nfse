@@ -169,50 +169,73 @@ Ao detectar:
 
 ---
 
-## Consulta CNPJ via BrasilAPI
+## Consulta de CNPJ
 
-API gratuita, sem autenticacao, dados da Receita Federal em tempo real.
+Duas opcoes — escolher conforme o contexto:
 
-### Endpoint
+| Opcao | Quando usar | Vantagem |
+|-------|-------------|----------|
+| **BrasilAPI** (curl) | Fora do fluxo do Chrome, setup, batch | Retorna JSON estruturado, sem abrir pagina |
+| **cnpj.biz** (Chrome) | Durante emissao (Chrome ja aberto) | Zero overhead — usar a aba do Chrome que ja existe |
+
+---
+
+### Opcao A: BrasilAPI via curl
 
 ```bash
-curl -s https://brasilapi.com.br/api/cnpj/v1/CNPJ_SEM_PONTUACAO
-```
-
-**Preparar o CNPJ antes de consultar** (remover pontos, barras e hifens):
-```bash
-# Exemplos equivalentes:
-# 50.318.661/0001-38 → 50318661000138
-# 12.345.678/0001-90 → 12345678000190
 CNPJ_LIMPO=$(echo "$CNPJ" | tr -d './- ')
+curl -s https://brasilapi.com.br/api/cnpj/v1/$CNPJ_LIMPO
 ```
 
-### Campos Retornados
+**Campos retornados:**
 
 | Campo | Uso |
 |-------|-----|
 | `razao_social` | Nome oficial da empresa |
 | `nome_fantasia` | Nome fantasia (pode ser vazio) |
-| `municipio` | Cidade (usar no portal e para detectar retencao ISS) |
+| `municipio` | Cidade (portal e retencao ISS) |
 | `uf` | Estado |
-| `codigo_municipio_ibge` | Codigo IBGE — comparar com prestador para detectar retencao ISS |
+| `codigo_municipio_ibge` | Comparar com prestador para detectar retencao ISS |
 | `descricao_situacao_cadastral` | "ATIVA" ou outro status |
 | `situacao_cadastral` | 2 = ATIVA |
-| `opcao_pelo_mei` | true/false — detectar MEI no setup |
-| `opcao_pelo_simples` | true/false — detectar Simples Nacional no setup |
+| `opcao_pelo_mei` | true/false |
+| `opcao_pelo_simples` | true/false |
 | `cnae_fiscal_descricao` | Atividade principal |
 
-### Tratamento de Erros
+**Erros:**
 
 | Situacao | Acao |
 |----------|------|
-| HTTP 404 | CNPJ nao encontrado na Receita — pedir ao usuario verificar o numero |
-| `situacao_cadastral != 2` | Avisar status e perguntar se deseja continuar |
-| Timeout / erro de rede | Avisar usuario e prosseguir com dados manuais |
+| HTTP 404 | CNPJ nao encontrado — pedir ao usuario verificar |
+| `situacao_cadastral != 2` | Avisar e confirmar se quer continuar |
+| Timeout / erro de rede | Tentar Opcao B (cnpj.biz no Chrome) |
 
-### Fallback Visual
+---
 
-Se a API estiver fora do ar: navegar para `https://cnpj.biz/CNPJ_LIMPO` no Chrome e extrair os dados da pagina visualmente.
+### Opcao B: cnpj.biz via Chrome (claude-in-chrome)
+
+Quando o Chrome ja esta aberto (durante emissao), usar a mesma aba ou abrir nova aba:
+
+```
+URL: https://cnpj.biz/CNPJ_LIMPO
+Exemplo: https://cnpj.biz/50318661000138
+```
+
+**Extrair do DOM da pagina:**
+```javascript
+// Razao social — titulo principal da empresa
+const razaoSocial = document.querySelector('h1.company-name, h1, .razao-social')?.textContent?.trim();
+
+// Municipio e UF — aparece em campo de endereco
+const municipioUF = document.querySelector('.municipio, .cidade-uf')?.textContent?.trim();
+
+// Situacao cadastral
+const situacao = document.querySelector('.situacao-cadastral, .status')?.textContent?.trim();
+```
+
+> Os selectors exatos do cnpj.biz podem variar. Se nao encontrar via selector, usar `get_page_text` e parsear o texto retornado — o nome da empresa aparece de forma destacada no inicio da pagina.
+
+**Apos extrair os dados:** fechar a aba ou voltar para a aba do portal nfse.gov.br.
 
 ---
 

@@ -80,29 +80,35 @@ Ao ser invocado, identifique o modo pelo argumento:
 
 ## Consulta Automatica de CNPJ
 
-**Sempre que receber um CNPJ (prestador ou tomador), consultar automaticamente:**
+**Sempre que receber um CNPJ (prestador ou tomador), consultar automaticamente. Escolher o metodo pelo contexto:**
+
+- **Setup / batch / sem Chrome aberto** → BrasilAPI via curl (retorna JSON direto)
+- **Durante emissao (Chrome ja aberto)** → cnpj.biz via navegacao no Chrome (sem overhead extra)
 
 ```bash
-# Remover pontuacao do CNPJ antes de consultar
+# BrasilAPI — remover pontuacao antes
 CNPJ_LIMPO=$(echo "12.345.678/0001-90" | tr -d './- ')
 curl -s https://brasilapi.com.br/api/cnpj/v1/$CNPJ_LIMPO
 ```
 
-**Campos retornados que importam:**
+```
+# cnpj.biz — navegar no Chrome
+https://cnpj.biz/CNPJ_LIMPO
+```
+
+Ver detalhes tecnicos em `references/portal-tecnico.md` → secao "Consulta de CNPJ".
+
+**Dados necessarios:**
 - `razao_social` — Nome da empresa
-- `municipio` — Cidade (para detectar retencao ISS)
+- `municipio` + `codigo_municipio_ibge` — Cidade e codigo IBGE (para retencao ISS)
 - `uf` — Estado
-- `codigo_municipio_ibge` — Codigo IBGE (comparar com prestador para retencao)
-- `descricao_situacao_cadastral` — "ATIVA" ou outro status
-- `situacao_cadastral` — 2 = ATIVA
-- `opcao_pelo_mei` — true/false
-- `opcao_pelo_simples` — true/false
-- `cnae_fiscal_descricao` — Atividade principal
+- `descricao_situacao_cadastral` / `situacao_cadastral` — Status (2 = ATIVA)
+- `opcao_pelo_mei` / `opcao_pelo_simples` — Para detectar regime no setup
 
 **Regras:**
-- Se erro 404: CNPJ nao encontrado na Receita Federal — pedir para o usuario verificar
-- Se `situacao_cadastral != 2`: avisar "ATENCAO: CNPJ com situacao [descricao_situacao_cadastral]" e perguntar se deseja continuar
-- Se API fora do ar (timeout/erro): avisar usuario e prosseguir com dados manuais
+- Se CNPJ nao encontrado (404 ou pagina vazia): pedir ao usuario verificar o numero
+- Se `situacao_cadastral != 2`: avisar "ATENCAO: CNPJ com situacao [descricao]" e confirmar se quer continuar
+- Se ambas as fontes falharem: avisar usuario e prosseguir com dados manuais
 
 ---
 
