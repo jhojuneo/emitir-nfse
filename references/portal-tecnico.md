@@ -106,13 +106,113 @@ Se `erros.length > 0`, reportar ao usuario e aguardar correcao.
 
 ---
 
-## Sessao Expirada
+## Login Automatico
 
-Se a sessao gov.br expirar durante o fluxo, o portal redireciona para login.
+**URL da pagina de login:**
+```
+https://www.nfse.gov.br/EmissorNacional/Login?ReturnUrl=%2fEmissorNacional
+```
 
-Detectar: verificar se a URL atual contem `login` ou `acesso.gov.br`.
+### Verificar se ja esta logado
 
-Ao detectar: informar o usuario, aguardar novo login, retomar do ponto onde parou (os dados ja preenchidos serao perdidos — o usuario precisara recomecar a nota).
+Antes de tentar logar, verificar se a sessao ja esta ativa:
+
+```javascript
+// Se a URL atual NÃO contem "Login", ja esta no painel do emissor
+const jaLogado = !window.location.href.includes('Login');
+```
+
+Se ja logado: pular o fluxo de login e navegar direto para a URL de emissao.
+
+### Selectors do Formulario de Login
+
+Os selectors exatos podem variar — **inspecionar o DOM na primeira execucao**. Padroes esperados:
+
+```javascript
+// Campo CPF/usuario (tentar em ordem ate encontrar)
+const campoCPF = document.querySelector('input[name*="cpf"]')
+  || document.querySelector('input[name*="usuario"]')
+  || document.querySelector('input[id*="cpf"]')
+  || document.querySelector('input[type="text"]:first-of-type');
+
+// Campo senha
+const campoSenha = document.querySelector('input[type="password"]');
+
+// Botao Entrar
+const botaoEntrar = document.querySelector('button[type="submit"]')
+  || document.querySelector('input[type="submit"]');
+```
+
+### Fluxo de Auto Login
+
+```
+1. Navegar para URL de login
+2. Aguardar pagina carregar (verificar presenca do campo CPF)
+3. Preencher campo CPF com cpf_acesso da config
+4. Preencher campo senha com senha_acesso da config
+5. Clicar botao "Entrar"
+6. Aguardar redirecionamento (poll a cada 500ms, timeout 10s)
+7. Verificar sucesso: URL deve sair da pagina de Login
+8. Se falhou: capturar .alert-danger ou mensagem de erro e reportar ao usuario
+```
+
+### Sessao Expirada
+
+Se a sessao expirar durante o fluxo, o portal redireciona para login.
+
+Detectar: verificar se a URL atual contem `Login` ou `acesso.gov.br`.
+
+Ao detectar:
+1. Tentar auto re-login automaticamente (se `cpf_acesso` e `senha_acesso` estao configurados)
+2. Se re-login bem-sucedido: informar usuario e pedir para reiniciar a nota (dados perdidos)
+3. Se re-login falhou ou credenciais nao configuradas: informar usuario e aguardar login manual
+
+---
+
+## Consulta CNPJ via BrasilAPI
+
+API gratuita, sem autenticacao, dados da Receita Federal em tempo real.
+
+### Endpoint
+
+```bash
+curl -s https://brasilapi.com.br/api/cnpj/v1/CNPJ_SEM_PONTUACAO
+```
+
+**Preparar o CNPJ antes de consultar** (remover pontos, barras e hifens):
+```bash
+# Exemplos equivalentes:
+# 50.318.661/0001-38 → 50318661000138
+# 12.345.678/0001-90 → 12345678000190
+CNPJ_LIMPO=$(echo "$CNPJ" | tr -d './- ')
+```
+
+### Campos Retornados
+
+| Campo | Uso |
+|-------|-----|
+| `razao_social` | Nome oficial da empresa |
+| `nome_fantasia` | Nome fantasia (pode ser vazio) |
+| `municipio` | Cidade (usar no portal e para detectar retencao ISS) |
+| `uf` | Estado |
+| `codigo_municipio_ibge` | Codigo IBGE — comparar com prestador para detectar retencao ISS |
+| `descricao_situacao_cadastral` | "ATIVA" ou outro status |
+| `situacao_cadastral` | 2 = ATIVA |
+| `opcao_pelo_mei` | true/false — detectar MEI no setup |
+| `opcao_pelo_simples` | true/false — detectar Simples Nacional no setup |
+| `cnae_fiscal_descricao` | Atividade principal |
+
+### Tratamento de Erros
+
+| Situacao | Acao |
+|----------|------|
+| HTTP 404 | CNPJ nao encontrado na Receita — pedir ao usuario verificar o numero |
+| `situacao_cadastral != 2` | Avisar status e perguntar se deseja continuar |
+| Timeout / erro de rede | Avisar usuario e prosseguir com dados manuais |
+
+### Fallback Visual
+
+Se a API estiver fora do ar: navegar para `https://cnpj.biz/CNPJ_LIMPO` no Chrome e extrair os dados da pagina visualmente.
 
 ---
 

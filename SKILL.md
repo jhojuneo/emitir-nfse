@@ -45,7 +45,11 @@ codigo_complementar_municipal: PREENCHER (ex: 17.01.01.001)
 descricao_padrao: PREENCHER
 caminho_salvamento: ~/Documents/NFS-e/
 faturamento_anual_acumulado: 0
+cpf_acesso: PREENCHER (CPF do responsavel, formato: 000.000.000-00)
+senha_acesso: PREENCHER (senha do portal nfse.gov.br — NAO e a senha gov.br)
 ```
+
+> **Seguranca:** A senha fica armazenada neste arquivo local. Se voce compartilhar o SKILL.md com alguem, remova a senha antes. Para nao armazenar, deixe `senha_acesso: PREENCHER` — a skill pedira a senha a cada uso.
 
 ---
 
@@ -74,6 +78,34 @@ Ao ser invocado, identifique o modo pelo argumento:
 
 ---
 
+## Consulta Automatica de CNPJ
+
+**Sempre que receber um CNPJ (prestador ou tomador), consultar automaticamente:**
+
+```bash
+# Remover pontuacao do CNPJ antes de consultar
+CNPJ_LIMPO=$(echo "12.345.678/0001-90" | tr -d './- ')
+curl -s https://brasilapi.com.br/api/cnpj/v1/$CNPJ_LIMPO
+```
+
+**Campos retornados que importam:**
+- `razao_social` — Nome da empresa
+- `municipio` — Cidade (para detectar retencao ISS)
+- `uf` — Estado
+- `codigo_municipio_ibge` — Codigo IBGE (comparar com prestador para retencao)
+- `descricao_situacao_cadastral` — "ATIVA" ou outro status
+- `situacao_cadastral` — 2 = ATIVA
+- `opcao_pelo_mei` — true/false
+- `opcao_pelo_simples` — true/false
+- `cnae_fiscal_descricao` — Atividade principal
+
+**Regras:**
+- Se erro 404: CNPJ nao encontrado na Receita Federal — pedir para o usuario verificar
+- Se `situacao_cadastral != 2`: avisar "ATENCAO: CNPJ com situacao [descricao_situacao_cadastral]" e perguntar se deseja continuar
+- Se API fora do ar (timeout/erro): avisar usuario e prosseguir com dados manuais
+
+---
+
 ## Verificacoes Proativas
 
 **Antes de qualquer emissao, verificar automaticamente:**
@@ -88,7 +120,7 @@ Ao ser invocado, identifique o modo pelo argumento:
 
 4. **Data retroativa** — Se a data de competencia for mais antiga que o mes anterior, avisar que o municipio pode ter prazo limite para emissao retroativa.
 
-5. **Retencao ISS** — Se o CNPJ do tomador for de municipio diferente do prestador (detectar pelo municipio via CNPJ), alertar sobre possivel retencao de ISS.
+5. **Retencao ISS** — Consultar BrasilAPI para o CNPJ do tomador. Se `codigo_municipio_ibge` do tomador for diferente do prestador (config), alertar: "Tomador e de outro municipio — verifique se ha retencao de ISS na fonte."
 
 ---
 
@@ -96,20 +128,38 @@ Ao ser invocado, identifique o modo pelo argumento:
 
 **Uso:** `/emitir-nfse 12.345.678/0001-90 3000 25/03/2026 "Assessoria em marketing digital"`
 
-### Passo 1 — Validar
+### Passo 1 — Validar e Consultar CNPJ
 
 1. Verificar se config esta completa (nenhum "PREENCHER")
-2. Executar todas as verificacoes proativas
-3. Resolver cliente: se o doc bater com algum da tabela de Clientes, mostrar o nome para confirmacao
+2. **Consultar BrasilAPI para o CNPJ do tomador:**
+   - Remover pontuacao: `12.345.678/0001-90` → `12345678000190`
+   - `curl -s https://brasilapi.com.br/api/cnpj/v1/12345678000190`
+   - Extrair: `razao_social`, `municipio`, `codigo_municipio_ibge`, `descricao_situacao_cadastral`
+   - Se CNPJ nao encontrado (404): avisar e pedir ao usuario verificar o numero
+   - Se inativo: avisar e confirmar se deseja continuar
+3. Executar verificacoes proativas (MEI, retencao ISS via `codigo_municipio_ibge`, data retroativa)
+4. Resolver cliente: se o doc bater com algum da tabela de Clientes, mostrar o nome para confirmacao; caso contrario, mostrar `razao_social` da BrasilAPI
+5. Confirmar com usuario: "Emitindo nota para [razao_social] — R$ [valor]? (S/n)"
 
-### Passo 2 — Verificar Login
+### Passo 2 — Login Automatico
 
 ```
-Navegar: https://www.nfse.gov.br/EmissorNacional/DPS/Pessoas/NovaNFSe
+Navegar: https://www.nfse.gov.br/EmissorNacional/Login?ReturnUrl=%2fEmissorNacional
 ```
 
-- Se redirecionar para login gov.br: informar ao usuario para logar e aguardar confirmacao
-- Apos login confirmado, navegar novamente para a URL acima
+1. Verificar se ja esta logado:
+   - Checar se URL **nao** contem `Login` e se existe o painel do emissor → ja logado, pular para Passo 3
+2. Se precisar logar:
+   - Inspecionar DOM para localizar: campo CPF/usuario, campo senha, botao "Entrar"
+   - Preencher campo CPF com `cpf_acesso` da config
+   - Se `senha_acesso` != "PREENCHER": preencher campo senha automaticamente
+   - Se `senha_acesso` = "PREENCHER": pedir ao usuario que digite a senha no Chrome e confirme aqui
+   - Clicar botao "Entrar"
+   - Aguardar redirecionamento ate 10 segundos
+   - Verificar sucesso: URL deve sair da pagina de Login
+   - Se falhou: capturar mensagem de erro e informar usuario
+3. Apos login confirmado, navegar para:
+   `https://www.nfse.gov.br/EmissorNacional/DPS/Pessoas/NovaNFSe`
 
 ### Passo 3 — Preencher Tomador (Etapa "Pessoas")
 
@@ -231,20 +281,33 @@ Descricao:   [descricao]
 
 Conduzir o usuario por uma entrevista guiada para preencher a Configuracao:
 
-1. **Nome da empresa:** "Qual e a razao social da sua empresa?"
-2. **CNPJ:** "Qual e o CNPJ? (formato: 00.000.000/0001-00)"
-3. **Municipio e UF:** "Em qual municipio e estado voce presta servicos?"
-4. **Regime tributario:** "Qual e o seu regime? (1) MEI  (2) Simples Nacional  (3) Lucro Presumido"
-5. **Aliquota ISS:**
+1. **CNPJ da empresa:** "Qual e o CNPJ da sua empresa?"
+   - Consultar BrasilAPI automaticamente
+   - Mostrar resultado: "Encontrei: [razao_social], [municipio]/[uf], regime detectado: [MEI/Simples/LP]"
+   - Perguntar: "Os dados estao corretos? (S/n)"
+   - Se nao: pedir correcao manual de cada campo
+   - Gravar automaticamente: `empresa_nome`, `cnpj`, `municipio`, `uf`, `regime`
+
+2. **CPF de acesso:** "Qual e o CPF do responsavel que tem acesso ao portal nfse.gov.br?"
+   - Gravar em `cpf_acesso`
+
+3. **Senha do portal:** "Qual e a senha do portal nfse.gov.br? (nao e a senha gov.br — pode deixar em branco para digitar a cada uso)"
+   - Se informada: gravar em `senha_acesso`
+   - Se em branco: gravar `senha_acesso: PREENCHER`
+
+4. **Aliquota ISS:**
    - MEI: nao perguntar (incluso no DAS), gravar 0
    - Simples: "Qual e a sua aliquota de ISS atual? Se nao souber, consulte seu contador."
    - LP: "Qual e a aliquota municipal de ISS? (geralmente 2% a 5%)"
-6. **Codigo de tributacao:**
+
+5. **Codigo de tributacao:**
    - Mostrar tabela resumida de `references/codigos-tributacao.md`
    - "Qual codigo melhor descreve seu servico?"
    - Informar que o complementar sera definido no portal
-7. **Descricao padrao:** "Qual sera a descricao padrao das suas notas? (pode personalizar por nota)"
-8. **Caminho de salvamento:** "Onde salvar os PDFs? (padrao: ~/Documents/NFS-e/)"
+
+6. **Descricao padrao:** "Qual sera a descricao padrao das suas notas? (pode personalizar por nota)"
+
+7. **Caminho de salvamento:** "Onde salvar os PDFs? (padrao: ~/Documents/NFS-e/)"
 
 Apos coletar tudo: confirmar com o usuario e escrever os valores na secao Configuracao do SKILL.md.
 
@@ -263,7 +326,11 @@ CLIENTES FREQUENTES
 4. Sair
 ```
 
-- **Adicionar:** pedir nome, CNPJ/CPF, tipo (CNPJ/CPF). Adicionar na tabela de Clientes.
+- **Adicionar:**
+  - Pedir o CNPJ ou CPF do cliente
+  - Se CNPJ: consultar BrasilAPI automaticamente e mostrar "Encontrei: [razao_social]"
+  - Se CPF: pedir o nome manualmente
+  - Confirmar e adicionar na tabela de Clientes
 - **Remover:** mostrar lista numerada, usuario escolhe qual remover.
 - Atualizar o SKILL.md com as alteracoes.
 
